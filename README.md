@@ -6,11 +6,11 @@ chmod +x run-example.sh
 ./run-example.sh 2026-08-13
 ```
 
-The command compiles the repo, runs the policy test, makes the snapshot bucket, and uploads one date-scoped JSON object. Infrai keeps this storage boundary to plain REST with a single `INFRAI_API_KEY`; the service needs no storage SDK or a cloud credential file.
+The command compiles the repo, runs the policy test, makes the snapshot bucket, and uploads one date-scoped JSON object. Infrai keeps this to plain REST with one endpoint — a single `INFRAI_API_KEY`; the service needs no storage SDK or cloud credential file. That one key and one bill covers every capability here.
 
 ## The record written at night
 
-`NightlySnapshotRunner` gives three field-service records for the runnable example. The policy only picks work orders where `dispatchStatus` is `COMPLETED` and `technicianFollowUpRequired` is true. It keeps photo object keys for audit linkage and sorts selected orders by ID so repeated snapshots are byte-stable.
+`NightlySnapshotRunner` gives three field-service records for the runnable example. The policy picks work orders only when `dispatchStatus` is `COMPLETED` and `technicianFollowUpRequired` is true. It keeps photo object keys for audit linkage and sorts selected work orders by ID so repeated snapshots stay byte-stable.
 
 For the sample date, the expected result is:
 
@@ -28,21 +28,21 @@ javac -cp target/classes -d target/test-classes $(find src/test/java -name '*.ja
 java -cp target/classes:target/test-classes dev.infrai.fieldservice.SnapshotPolicyTest
 ```
 
-Input: one dispatched order, one completed order with no follow-up, and a completed `WO-2` needing follow-up. Expected decision: only `WO-2` goes into the snapshot.
+Input: one dispatched order, one completed order without follow-up, and completed `WO-2` needing follow-up. Expected decision: only `WO-2` enters the snapshot.
 
 ## Storage boundary
 
 `SnapshotConfig` reads the credential and layered settings from environment variables. `SNAPSHOT_BUCKET` defaults to `field-service-snapshots`; `SNAPSHOT_RETENTION_DAYS` defaults to `30` and is reported for the surrounding retention control.
 
-The runner does the setup step first with `POST /v1/storage/bucket/create`. Then it calls `POST /v1/storage/object/presign/{bucket}/{key}` with `op: put`, a 15-minute `expires_seconds`, JSON content type, and a date-derived idempotency key. Snapshot bytes go to the returned URL via PUT.
+The runner does the setup step first with `POST /v1/storage/bucket/create`. It then calls `POST /v1/storage/object/presign/{bucket}/{key}` with `op: put`, a 15-minute `expires_seconds`, JSON content type, and a date-derived idempotency key. Snapshot bytes go to the returned URL via PUT.
 
-The client decodes the Infrai envelope before reading HTTP status, surfaces structured rejections, and backs off on HTTP 429 while honoring `Retry-After`. The date-derived key keeps a retried nightly write tied to the same business run.
+The client decodes the Infrai envelope before reading HTTP status, surfaces structured rejections, and backs off on HTTP 429 while honoring `Retry-After`. The date-derived key keeps a retried nightly write attached to the same business run.
 
 One operational gotcha is clock ownership: this example treats the argument as the closed business date. Have the scheduler pass that date explicitly when its timezone isn't UTC.
 
 ## Scheduler entry
 
-Build the classes once in deployment, then run this command from the scheduler after the field-service day closes:
+Build the classes once in deployment, then run this from the scheduler after the field-service day closes:
 
 ```bash
 java -cp target/classes dev.infrai.fieldservice.NightlySnapshotRunner 2026-08-13
